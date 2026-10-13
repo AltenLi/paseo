@@ -130,8 +130,7 @@ export async function findExecutableWithoutProbing(
   name: string,
   options: { path?: string; cwd: string },
 ): Promise<string | null> {
-  const trimmed = name.trim();
-  if (!trimmed) {
+  if (!name) {
     return null;
   }
   const path =
@@ -141,7 +140,7 @@ export async function findExecutableWithoutProbing(
           .split(delimiter)
           .map((entry) => resolve(options.cwd, entry))
           .join(delimiter);
-  const candidates = await enumerateCandidatesViaLibrary(trimmed, { PATH: path });
+  const candidates = await enumerateCandidatesViaLibrary(name, { PATH: path });
   return candidates[0] ?? null;
 }
 

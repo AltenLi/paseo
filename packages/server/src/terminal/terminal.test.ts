@@ -663,7 +663,7 @@ describe("createTerminal", () => {
       const binDir = mkdtempSync(join(tmpdir(), "terminal-envpath-bin-"));
       temporaryDirs.push(binDir);
       const toolPath = join(binDir, "paseo-qa-envpath-tool");
-      writeFileSync(toolPath, "#!/usr/bin/env bash\nsleep 30\n");
+      writeFileSync(toolPath, "#!/usr/bin/env bash\nprintf 'paseo-launch-ok\\n'\nsleep 30\n");
       chmodSync(toolPath, 0o755);
 
       const session = trackSession(
@@ -677,7 +677,8 @@ describe("createTerminal", () => {
         }),
       );
 
-      expect(session.id).toBeDefined();
+      await waitForLines(session, ["paseo-launch-ok"]);
+      expect(getLines(session.getState())[0]).toBe("paseo-launch-ok");
     },
   );
 
@@ -706,7 +707,7 @@ describe("createTerminal", () => {
       temporaryDirs.push(projectDir);
       mkdirSync(join(projectDir, "scripts"));
       const scriptPath = join(projectDir, "scripts", "dev.sh");
-      writeFileSync(scriptPath, "#!/usr/bin/env bash\nsleep 30\n");
+      writeFileSync(scriptPath, "#!/usr/bin/env bash\nprintf 'paseo-launch-ok\\n'\nsleep 30\n");
       chmodSync(scriptPath, 0o755);
 
       const session = trackSession(
@@ -719,7 +720,8 @@ describe("createTerminal", () => {
         }),
       );
 
-      expect(session.id).toBeDefined();
+      await waitForLines(session, ["paseo-launch-ok"]);
+      expect(getLines(session.getState())[0]).toBe("paseo-launch-ok");
     },
   );
 
@@ -727,7 +729,7 @@ describe("createTerminal", () => {
     const projectDir = mkdtempSync(join(tmpdir(), "terminal-absolute-cmd-"));
     temporaryDirs.push(projectDir);
     const scriptPath = join(projectDir, "run.sh");
-    writeFileSync(scriptPath, "#!/usr/bin/env bash\nsleep 30\n");
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\nprintf 'paseo-launch-ok\\n'\nsleep 30\n");
     chmodSync(scriptPath, 0o755);
 
     const session = trackSession(
@@ -740,7 +742,8 @@ describe("createTerminal", () => {
       }),
     );
 
-    expect(session.id).toBeDefined();
+    await waitForLines(session, ["paseo-launch-ok"]);
+    expect(getLines(session.getState())[0]).toBe("paseo-launch-ok");
   });
 
   it("leaves the command check to the terminal itself on Windows", async () => {
@@ -1538,7 +1541,7 @@ it.runIf(isPlatform("linux", "darwin"))(
     const projectDir = mkdtempSync(join(tmpdir(), "terminal-relative-path-"));
     mkdirSync(join(projectDir, "bin"));
     const script = join(projectDir, "bin", "paseo-relative-path-tool");
-    writeFileSync(script, "#!/bin/sh\nexec /bin/sleep 30\n");
+    writeFileSync(script, "#!/bin/sh\nprintf 'paseo-launch-ok\\n'\nexec /bin/sleep 30\n");
     chmodSync(script, 0o755);
     let session: TerminalSession | undefined;
     try {
@@ -1548,11 +1551,26 @@ it.runIf(isPlatform("linux", "darwin"))(
         command: "paseo-relative-path-tool",
         env: { PATH: "bin" },
       });
+      await waitForLines(session, ["paseo-launch-ok"]);
+      expect(getLines(session.getState())[0]).toBe("paseo-launch-ok");
       expect(session.cwd).toBe(realpathSync(projectDir));
       expect(session.getExitInfo()).toBeNull();
     } finally {
       await session?.killAndWait({ gracefulTimeoutMs: 1000, forceTimeoutMs: 500 });
       rmSync(projectDir, { recursive: true, force: true });
     }
+  },
+);
+
+it.runIf(isPlatform("linux", "darwin"))(
+  "checks the exact command rather than accepting a trimmed executable name",
+  async () => {
+    await expect(
+      createTerminal({
+        workspaceId: "ws-test",
+        cwd: realpathSync(tmpdir()),
+        command: " node ",
+      }),
+    ).rejects.toThrow(" node : command not found");
   },
 );
