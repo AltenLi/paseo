@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
+import { execFileSync } from "node:child_process";
 import { createDaemonTestContext, type DaemonTestContext } from "../test-utils/index.js";
 
 function tmpCwd(): string {
