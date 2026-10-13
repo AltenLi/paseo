@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, onTestFinished } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -91,7 +91,8 @@ describe("checkout discard", () => {
           await subscription.release();
         }
       } finally {
-        rmSync(cwd, { recursive: true, force: true });
+        // afterEach shuts down the daemon and its repository observers first.
+        onTestFinished(() => rmSync(cwd, { recursive: true, force: true }));
       }
     },
   );
