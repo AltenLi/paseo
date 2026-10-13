@@ -1,4 +1,4 @@
-import { constants, promises as fs, type BigIntStats } from "fs";
+import { constants, promises as fs, type BigIntStats, type Stats } from "fs";
 import type { FileHandle } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
@@ -489,7 +489,7 @@ export async function writeExplorerFile({
 
   const temporaryPath = path.join(
     path.dirname(filePath.resolvedPath),
-    `.${path.basename(filePath.resolvedPath)}.paseo-${randomUUID()}.tmp`,
+    `.paseo-${randomUUID()}.tmp`,
   );
   let temporaryHandle: FileHandle | null = null;
   try {
@@ -707,11 +707,10 @@ export async function renameExplorerEntry({
       }
       throw error;
     });
-    if (
-      targetStats &&
-      (targetStats.dev !== sourceStats.dev || targetStats.ino !== sourceStats.ino)
-    ) {
-      return { status: "error", error: `"${trimmedName}" already exists` };
+    if (targetStats) {
+      if (!(await isCaseOnlyRename(source, targetPath, sourceStats, targetStats))) {
+        return { status: "error", error: `"${trimmedName}" already exists` };
+      }
     }
 
     const sourcePath = normalizeRelativePath({ root, targetPath: source.requestedPath });
@@ -725,7 +724,11 @@ export async function renameExplorerEntry({
     });
     const tracked =
       repository.exitCode === 0
-        ? await runGitCommand(["ls-files", "-z", "--", sourcePath], { cwd: realRoot })
+        ? await runGitCommand(["ls-files", "-z", "--", `:(literal)${sourcePath}`], {
+            cwd: realRoot,
+            // Inherited literal mode disables the :(literal) pathspec magic.
+            envOverlay: { GIT_LITERAL_PATHSPECS: undefined },
+          })
         : null;
     if (tracked?.stdout) {
       await runGitCommand(["mv", "--", sourcePath, renamedPath], { cwd: realRoot });
@@ -782,33 +785,48 @@ function isEntryExistsError(error: unknown): boolean {
   );
 }
 
+async function isCaseOnlyRename(
+  source: ScopedPath,
+  targetPath: string,
+  sourceStats: Stats,
+  targetStats: Stats,
+): Promise<boolean> {
+  const hasStableFileIds =
+    sourceStats.dev !== 0 ||
+    sourceStats.ino !== 0 ||
+    targetStats.dev !== 0 ||
+    targetStats.ino !== 0;
+  const isSameEntry = hasStableFileIds
+    ? targetStats.dev === sourceStats.dev && targetStats.ino === sourceStats.ino
+    : !sourceStats.isSymbolicLink() &&
+      !targetStats.isSymbolicLink() &&
+      (await fs.realpath(targetPath)) === source.resolvedPath;
+  return isSameEntry && source.requestedPath.toLowerCase() === targetPath.toLowerCase();
+}
+
 async function resolveScopedPath({
   root,
   relativePath = ".",
 }: ScopedPathParams): Promise<ScopedPath> {
-  const normalizedRoot = expandUserPath(root);
-  const requestedPath = resolvePathFromBase(normalizedRoot, relativePath);
-  const relative = path.relative(normalizedRoot, requestedPath);
-
-  if (relative !== "" && (relative.startsWith("..") || path.isAbsolute(relative))) {
-    throw new Error(ACCESS_OUTSIDE_WORKSPACE_MESSAGE);
-  }
-
-  const realRoot = await fs.realpath(normalizedRoot);
-
+  const workspacePath = expandUserPath(root);
+  const requestedPath = resolvePathFromBase(workspacePath, relativePath);
+  assertWithinWorkspace(workspacePath, requestedPath);
+  const canonicalRoot = await fs.realpath(workspacePath);
   try {
-    const realPath = await fs.realpath(requestedPath);
-    const realRelative = path.relative(realRoot, realPath);
-    if (realRelative !== "" && (realRelative.startsWith("..") || path.isAbsolute(realRelative))) {
-      throw new Error(ACCESS_OUTSIDE_WORKSPACE_MESSAGE);
-    }
-    return { requestedPath, resolvedPath: realPath };
+    const canonicalPath = await fs.realpath(requestedPath);
+    assertWithinWorkspace(canonicalRoot, canonicalPath);
+    return { requestedPath, resolvedPath: canonicalPath };
   } catch (error) {
-    if (isMissingEntryError(error)) {
-      return { requestedPath, resolvedPath: requestedPath };
-    }
+    if (isMissingEntryError(error)) return { requestedPath, resolvedPath: requestedPath };
     throw error;
   }
+}
+
+function assertWithinWorkspace(root: string, candidate: string): void {
+  const relative = path.relative(root, candidate);
+  const isOutsideWorkspace =
+    relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (isOutsideWorkspace) throw new Error(ACCESS_OUTSIDE_WORKSPACE_MESSAGE);
 }
 
 async function openFileForRead(filePath: string): Promise<FileHandle> {

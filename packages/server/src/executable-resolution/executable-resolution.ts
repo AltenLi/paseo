@@ -1,12 +1,14 @@
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
+import { delimiter, resolve } from "node:path";
+import type { ProcessEnvRecord } from "../server/paseo-env.js";
 import { execCommand } from "../utils/spawn.js";
-import { isWindowsCommandScript } from "../utils/windows-command.js";
 import { windowsExecutableResolution } from "./windows.js";
 
-export { quoteWindowsArgument, quoteWindowsCommand } from "../utils/windows-command.js";
-
-type Which = (command: string, options: { all: true; path?: string }) => Promise<string[]>;
+type Which = (
+  command: string,
+  options: { all: true; path?: string; pathExt?: string },
+) => Promise<string[]>;
 
 const require = createRequire(import.meta.url);
 const which = require("which") as Which;
@@ -16,29 +18,38 @@ function hasPathSeparator(value: string): boolean {
   return value.includes("/") || value.includes("\\");
 }
 
-async function enumerateCandidates(name: string): Promise<string[]> {
+async function enumerateCandidates(name: string, env?: ProcessEnvRecord): Promise<string[]> {
   if (process.platform !== "win32" && existsSync("/usr/bin/which")) {
-    return enumerateCandidatesViaSystemWhich(name);
+    return enumerateCandidatesViaSystemWhich(name, env);
   }
-  return enumerateCandidatesViaLibrary(name);
+  return enumerateCandidatesViaLibrary(name, env);
 }
 
-async function enumerateCandidatesViaSystemWhich(name: string): Promise<string[]> {
+async function enumerateCandidatesViaSystemWhich(
+  name: string,
+  env?: ProcessEnvRecord,
+): Promise<string[]> {
   try {
     const { stdout } = await execCommand("/usr/bin/which", ["-a", name], {
+      baseEnv: env,
       timeout: 3000,
       killSignal: "SIGKILL",
     });
     return Array.from(new Set(stdout.trim().split("\n").filter(Boolean)));
-  } catch {
-    return [];
+  } catch (error) {
+    // which exits 1 for a missing command. A failed lookup is not evidence of absence.
+    if (error instanceof Error && "code" in error && error.code === 1) return [];
+    throw error;
   }
 }
 
-async function enumerateCandidatesViaLibrary(name: string, path?: string): Promise<string[]> {
+async function enumerateCandidatesViaLibrary(
+  name: string,
+  env?: ProcessEnvRecord,
+): Promise<string[]> {
   let candidates: string[];
   try {
-    candidates = await which(name, { all: true, ...(path === undefined ? {} : { path }) });
+    candidates = await which(name, { all: true, path: env?.PATH, pathExt: env?.PATHEXT });
   } catch (error) {
     // `which` throws ENOENT when the command is absent from PATH.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -59,14 +70,16 @@ async function enumerateCandidatesViaLibrary(name: string, path?: string): Promi
 
 export async function probeExecutable(
   executablePath: string,
-  timeoutMs = PROBE_TIMEOUT_MS,
+  options: number | ExecutableResolutionOptions = PROBE_TIMEOUT_MS,
 ): Promise<boolean> {
+  const { probeTimeoutMs: timeoutMs = PROBE_TIMEOUT_MS, env } =
+    typeof options === "number" ? { probeTimeoutMs: options } : options;
   try {
     await execCommand(executablePath, ["--version"], {
+      baseEnv: env,
       timeout: timeoutMs,
       killSignal: "SIGKILL",
       maxBuffer: 64 * 1024,
-      shell: isWindowsCommandScript(executablePath),
     });
     return true;
   } catch (error) {
@@ -115,20 +128,34 @@ export function executableExists(
 // environment its child process will actually get rather than the daemon's own.
 export async function findExecutableWithoutProbing(
   name: string,
-  options: { path?: string } = {},
+  options: { path?: string; cwd: string },
 ): Promise<string | null> {
   const trimmed = name.trim();
   if (!trimmed) {
     return null;
   }
-  const candidates = await enumerateCandidatesViaLibrary(trimmed, options.path);
+  const path =
+    options.path === undefined
+      ? undefined
+      : options.path
+          .split(delimiter)
+          .map((entry) => resolve(options.cwd, entry))
+          .join(delimiter);
+  const candidates = await enumerateCandidatesViaLibrary(trimmed, { PATH: path });
   return candidates[0] ?? null;
+}
+
+export interface ExecutableResolutionOptions {
+  probeTimeoutMs?: number;
+  env?: ProcessEnvRecord;
 }
 
 export async function findExecutable(
   name: string,
-  probeTimeoutMs = PROBE_TIMEOUT_MS,
+  options: number | ExecutableResolutionOptions = PROBE_TIMEOUT_MS,
 ): Promise<string | null> {
+  const { probeTimeoutMs = PROBE_TIMEOUT_MS, env } =
+    typeof options === "number" ? { probeTimeoutMs: options } : options;
   const trimmed = name.trim();
   if (!trimmed) {
     return null;
@@ -136,20 +163,21 @@ export async function findExecutable(
 
   if (process.platform === "win32") {
     return windowsExecutableResolution.find(trimmed, {
-      enumeratePathCandidates: enumerateCandidates,
-      probeExecutable,
+      enumeratePathCandidates: (command) => enumerateCandidates(command, env),
+      probeExecutable: (command, timeout) =>
+        probeExecutable(command, { probeTimeoutMs: timeout, env }),
       exists: existsSync,
       probeTimeoutMs,
     });
   }
 
   if (hasPathSeparator(trimmed)) {
-    return (await probeExecutable(trimmed, probeTimeoutMs)) ? trimmed : null;
+    return (await probeExecutable(trimmed, { probeTimeoutMs, env })) ? trimmed : null;
   }
 
-  const candidates = await enumerateCandidates(trimmed);
+  const candidates = await enumerateCandidates(trimmed, env);
   for (const candidate of candidates) {
-    if (await probeExecutable(candidate, probeTimeoutMs)) {
+    if (await probeExecutable(candidate, { probeTimeoutMs, env })) {
       return candidate;
     }
   }

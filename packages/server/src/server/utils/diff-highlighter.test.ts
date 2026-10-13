@@ -175,7 +175,49 @@ index 1234567..abcdefg 100644
  {/if}
 `;
 
+const ASTRO_DIFF = `diff --git a/Page.astro b/Page.astro
+index 1234567..abcdefg 100644
+--- a/Page.astro
++++ b/Page.astro
+@@ -1,7 +1,7 @@
+ ---
+-const title = "Hello";
++const title = "Hello, Astro";
+ ---
+ <main class="page">
+   <h1>{title}</h1>
+ </main>
+`;
+
 describe("parseDiff", () => {
+  it.each(["-- comment", "++ marker"])(
+    "preserves hunk content resembling patch headers: %s",
+    (content) => {
+      const files = parseDiff(`diff --git a/example.txt b/example.txt
+index 1234567..abcdefg 100644
+--- a/example.txt
++++ b/example.txt
+@@ -1 +1 @@
+-${content} before
++${content} after
+`);
+
+      expect(files).toHaveLength(1);
+      expect(files[0]).toMatchObject({
+        path: "example.txt",
+        isNew: false,
+        isDeleted: false,
+        additions: 1,
+        deletions: 1,
+      });
+      expect(files[0].hunks[0].lines).toEqual([
+        { type: "header", content: "@@ -1 +1 @@" },
+        { type: "remove", content: `${content} before` },
+        { type: "add", content: `${content} after` },
+      ]);
+    },
+  );
+
   it("parses a simple diff with one hunk", () => {
     const files = parseDiff(SIMPLE_DIFF);
 
@@ -513,6 +555,18 @@ describe("highlightDiffFromHunks", () => {
     expect(markupLine!.tokens!.some((t) => t.text === "span" && t.style === "tag")).toBe(true);
   });
 
+  it("adds syntax highlighting tokens to Astro components", () => {
+    const [file] = parseDiff(ASTRO_DIFF);
+    const highlighted = highlightDiffFromHunks(file);
+    const addedLine = highlighted.hunks[0].lines.find((line) => line.type === "add");
+    const markupLine = highlighted.hunks[0].lines.find((line) => line.content.includes("<main"));
+
+    expect(addedLine?.tokens).toContainEqual({ text: "const", style: "keyword" });
+    expect(addedLine?.tokens).toContainEqual({ text: '"Hello, Astro"', style: "string" });
+    expect(markupLine?.tokens).toContainEqual({ text: "main", style: "tag" });
+    expect(markupLine?.tokens).toContainEqual({ text: "class", style: "attribute" });
+  });
+
   it("adds syntax highlighting tokens to Objective-C file extensions", () => {
     const files = parseDiff(OBJECTIVE_C_DIFF);
     const highlighted = highlightDiffFromHunks(files[0]);
@@ -571,6 +625,28 @@ describe("highlightDiffFromHunks", () => {
 });
 
 describe("highlightDiffWithFileContent", () => {
+  it("renders an Astro diff with an empty expression and keeps surrounding highlighting", async () => {
+    const diff = ASTRO_DIFF.replace("{title}", "{title} {}");
+    const file = parseDiff(diff)[0];
+    const highlighted = await highlightDiffWithFileContent(file, ".", {
+      oldFileContent:
+        '---\nconst title = "Hello";\n---\n<main class="page">\n  <h1>{title} {}</h1>\n</main>',
+      newFileContent:
+        '---\nconst title = "Hello, Astro";\n---\n<main class="page">\n  <h1>{title} {}</h1>\n</main>',
+    });
+
+    expect(highlighted.hunks[0].lines.find((line) => line.type === "add")?.tokens).toContainEqual({
+      text: '"Hello, Astro"',
+      style: "string",
+    });
+    expect(highlighted.hunks[0].lines.map(({ content }) => content)).toEqual(
+      file.hunks[0].lines.map(({ content }) => content),
+    );
+    expect(
+      highlightDiffFromHunks(file).hunks[0].lines.find((line) => line.type === "add")?.tokens,
+    ).toContainEqual({ text: '"Hello, Astro"', style: "string" });
+  });
+
   it("leaves files with an oversized line unhighlighted", async () => {
     const oversizedLine = `const payload = "${"x".repeat(10_001)}";`;
     const [file] = parseDiff(

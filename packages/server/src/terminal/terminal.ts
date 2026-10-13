@@ -605,7 +605,9 @@ function extractCell(terminal: TerminalType, row: number, col: number): Terminal
   const bg = bgMode !== 0 ? cell.getBgColor() : undefined;
 
   return {
-    char: cell.getChars() || " ",
+    // Wide chars (CJK) span two cells; xterm returns "" for the zero-width
+    // continuation. Collapsing it to " " injects a real space on restore.
+    char: cell.getWidth() === 0 ? "" : cell.getChars() || " ",
     fg,
     bg,
     fgMode: fgMode !== 0 ? fgMode : undefined,
@@ -664,7 +666,9 @@ function extractScrollback(
           const fg = fgMode !== 0 ? cell.getFgColor() : undefined;
           const bg = bgMode !== 0 ? cell.getBgColor() : undefined;
           rowCells.push({
-            char: cell.getChars() || " ",
+            // Wide chars (CJK) span two cells; xterm returns "" for the zero-width
+            // continuation. Collapsing it to " " injects a real space on restore.
+            char: cell.getWidth() === 0 ? "" : cell.getChars() || " ",
             fg,
             bg,
             fgMode: fgMode !== 0 ? fgMode : undefined,
@@ -954,7 +958,10 @@ export async function assertTerminalCommandCanStart(
     throw new TerminalCommandNotFoundError(command);
   }
 
-  const resolved = await findExecutableWithoutProbing(command, { path: env[getPathEnvKey(env)] });
+  const resolved = await findExecutableWithoutProbing(command, {
+    path: env[getPathEnvKey(env)],
+    cwd,
+  });
   if (!resolved) {
     throw new TerminalCommandNotFoundError(command);
   }
